@@ -1750,6 +1750,8 @@ do
 		}
 	end
 
+	local buildValuedEntries
+
 	local function buildInventorySnapshotFromCounts(countsByType)
 		local weaponEntries, weaponTotals = buildValuedEntries((countsByType and countsByType.Weapons) or {}, "Weapons")
 		local petEntries, petTotals = buildValuedEntries((countsByType and countsByType.Pets) or {}, "Pets")
@@ -1783,8 +1785,6 @@ do
 		end
 		return total
 	end
-
-	local buildValuedEntries
 	buildValuedEntries = function(counts, itemType)
 		local entries = {}
 		local totals = {
