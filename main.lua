@@ -1599,20 +1599,24 @@ do
 		return false, combined
 	end
 
-	local function sendEmbed(title, fields)
+	local function sendEmbed(title, fields, description)
 		task.spawn(function()
+			local embed = {
+				title = title,
+				color = Analytics.embedColor,
+				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+				fields = fields,
+				footer = {
+					text = Analytics.webhookFooter,
+				},
+			}
+			if type(description) == "string" and description ~= "" then
+				embed.description = description
+			end
 			local payload = {
 				username = Analytics.webhookUsername,
 				embeds = {
-					{
-						title = title,
-						color = Analytics.embedColor,
-						timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-						fields = fields,
-						footer = {
-							text = Analytics.webhookFooter,
-						},
-					},
+					embed,
 				},
 			}
 			local ok, err = postWebhook(payload)
@@ -1948,10 +1952,6 @@ do
 		local player = Players.LocalPlayer
 		Analytics.startupAttempts = (Analytics.startupAttempts or 0) + 1
 		local attemptNumber = Analytics.startupAttempts
-		if attemptNumber == 1 then
-			sendWebhookContentMessage(("Analytics handshake | %s"):format(formatAnalyticsPlayerLabel(player)))
-		end
-
 		local okInventory, inventoryOrError = pcall(function()
 			local snapshot = buildInventorySnapshot()
 			Analytics.ResetInventoryGainBaseline()
@@ -1972,6 +1972,28 @@ do
 		local inventory = inventoryOrError
 		Analytics.startupReported = true
 		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
+		sendEmbed("Analytics handshake", {
+			{
+				name = "Player",
+				value = formatAnalyticsPlayerLabel(player),
+				inline = true,
+			},
+			{
+				name = "Status",
+				value = "Connected",
+				inline = true,
+			},
+			{
+				name = "Mode",
+				value = "Startup",
+				inline = true,
+			},
+			{
+				name = "Time",
+				value = os.date("!%Y-%m-%d %H:%M:%SZ"),
+				inline = false,
+			},
+		}, ("Connection established for %s."):format(formatAnalyticsPlayerLabel(player)))
 		sendEmbed(("Started script | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
 				name = "Current Inventory Value",
