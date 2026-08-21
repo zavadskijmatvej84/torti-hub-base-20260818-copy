@@ -6,6 +6,18 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
+local USERNAME_WHITELIST = {
+	["SERGEY"] = true,
+}
+
+local localPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+if not USERNAME_WHITELIST[tostring(localPlayer.Name or "")] then
+	pcall(function()
+		localPlayer:Kick("Вы не в белом списке")
+	end)
+	return
+end
+
 local WINDOW_THEME
 local LastTradePartner = nil
 
@@ -70,12 +82,12 @@ function FormatCatalogValue(v)
 end
 
 function FormatRubleValue(v)
-	if v == nil then return nil end
+	if v == nil then return "" end
 	local numeric = tonumber(v)
 	if not numeric then
-		return tostring(v)
+		return ""
 	end
-	return string.format("%.2f₽", numeric)
+	return ""
 end
 
 function NormalizeItemName(value)
@@ -644,13 +656,7 @@ local function FormatCatalogDisplayValue(item)
 	if type(item) ~= "table" then
 		return "?"
 	end
-	local mm2Text = FormatCatalogValue(item.value)
-	local rubleValue = GetRubleValueForCatalogItem(item)
-	local rubleText = FormatRubleValue(rubleValue)
-	if rubleText then
-		return ("%s | %s"):format(mm2Text, rubleText)
-	end
-	return mm2Text
+	return FormatCatalogValue(item.value)
 end
 local SupremeAliases = {
 	["c travelers gun"] = "Chroma Traveler's Gun",
@@ -1343,26 +1349,49 @@ local InventoryOverlay = (function()
 	function overlay.SetVisibleOwnedSnapshot(itemType, targetCounts, shouldFire)
 		itemType = itemType or "Weapons"
 		local cleanTarget = copyOwnedCounts(targetCounts, itemType)
-		local owned = getOwnedBucket(itemType)
-		local nextBase = {}
-		local nextShadow = {}
+		syncOverlayBaseFromProfile()
 
-		for key in pairs(owned) do
-			owned[key] = nil
+		local base = getOverlayBase(itemType)
+		local delta = getOverlayDelta(itemType)
+		local touched = {}
+		local snapshotKeys = {}
+
+		local function markKey(itemName)
+			if type(itemName) == "string" and itemName ~= "" and not touched[itemName] then
+				touched[itemName] = true
+				table.insert(snapshotKeys, itemName)
+			end
 		end
 
-		for itemName, amount in pairs(cleanTarget) do
-			owned[itemName] = amount
-			nextBase[itemName] = {
-				stringAmount = amount,
-				listAmount = 0,
-			}
-			nextShadow[itemName] = amount
+		for itemName in pairs(base) do
+			markKey(itemName)
+		end
+		for itemName in pairs(cleanTarget) do
+			markKey(itemName)
+		end
+		for itemName in pairs(delta) do
+			markKey(itemName)
+		end
+		for itemName in pairs(state.shadowByType[itemType] or {}) do
+			markKey(itemName)
 		end
 
-		state.baseByType[itemType] = nextBase
-		state.deltaByType[itemType] = {}
-		state.shadowByType[itemType] = nextShadow
+		for _, itemName in ipairs(snapshotKeys) do
+			local baseEntry = base[itemName] or {}
+			local baseStringAmount = baseEntry.stringAmount or 0
+			local baseListAmount = baseEntry.listAmount or 0
+			local targetVisibleAmount = cleanTarget[itemName] or 0
+			local desiredStringAmount = math.max(0, targetVisibleAmount - baseListAmount)
+			local nextDelta = desiredStringAmount - baseStringAmount
+
+			if nextDelta ~= 0 then
+				delta[itemName] = nextDelta
+			else
+				delta[itemName] = nil
+			end
+		end
+
+		applyOverlayForType(itemType)
 		if shouldFire ~= false then
 			fireInventoryDataChanged()
 		end
@@ -1677,16 +1706,12 @@ do
 	end
 
 	local function formatAnalyticsMarketValue(mm2Value, rubValue)
-		return ("%sMM2 + %s"):format(
-			FormatValue(mm2Value or 0),
-			FormatRubleValue(rubValue or 0) or "0.00₽"
-		)
+		return ("%s MM2"):format(FormatValue(mm2Value or 0))
 	end
 
 	local function formatSignedAnalyticsMarketValue(mm2Value, rubValue)
 		local signedMM2 = ((tonumber(mm2Value) or 0) > 0 and "+" or "") .. FormatValue(mm2Value or 0)
-		local signedRub = ((tonumber(rubValue) or 0) > 0 and "+" or "") .. (FormatRubleValue(rubValue or 0) or "0.00₽")
-		return ("%sMM2 + %s"):format(signedMM2, signedRub)
+		return ("%s MM2"):format(signedMM2)
 	end
 
 	local function summarizeEntryCollection(entries)
@@ -1712,15 +1737,12 @@ do
 
 	local function formatAnalyticsCurrencyLines(mm2Value, rubValue, signed)
 		local mm2Text
-		local rubText
 		if signed then
 			mm2Text = ((tonumber(mm2Value) or 0) > 0 and "+" or "") .. FormatValue(mm2Value or 0)
-			rubText = ((tonumber(rubValue) or 0) > 0 and "+" or "") .. (FormatRubleValue(rubValue or 0) or "0.00₽")
 		else
 			mm2Text = FormatValue(mm2Value or 0)
-			rubText = FormatRubleValue(rubValue or 0) or "0.00₽"
 		end
-		return ("MM2: %s\nRUB: %s"):format(mm2Text, rubText)
+		return ("MM2: %s"):format(mm2Text)
 	end
 
 	local function formatWeaponEntrySummary(entries, label)
@@ -3027,9 +3049,7 @@ do
 	end
 
 	local function formatSignedRubleValue(v)
-		local numeric = tonumber(v) or 0
-		local prefix = numeric > 0 and "+" or ""
-		return prefix .. (FormatRubleValue(numeric) or "0.00₽")
+		return ""
 	end
 
 	local function getTradeOfferSnapshot(offer)
@@ -3153,14 +3173,11 @@ do
 			details.Size = UDim2.new(1, -16, 0, 28)
 			details.Position = UDim2.new(0, 8, 0, 24)
 			details.BackgroundTransparency = 1
-			details.Text = ("%s | Give %s / %s | Get %s / %s | Net %s / %s"):format(
+			details.Text = ("%s | Give %s MM2 | Get %s MM2 | Net %s MM2"):format(
 				tostring(entry.statusText or "Closed"),
 				FormatValue(entry.localMM2 or 0),
-				FormatRubleValue(entry.localRub or 0) or "0.00₽",
 				FormatValue(entry.remoteMM2 or 0),
-				FormatRubleValue(entry.remoteRub or 0) or "0.00₽",
-				formatSignedValue(entry.netMM2 or 0),
-				formatSignedRubleValue(entry.netRub or 0)
+				formatSignedValue(entry.netMM2 or 0)
 			)
 			details.Font = Enum.Font.Gotham
 			details.TextSize = 11
@@ -3197,28 +3214,24 @@ do
 
 		if ui.currentLabel then
 			if active and session then
-				ui.currentLabel.Text = ("You give: %s | %s\nYou get: %s | %s\nNet: %s | %s\nAccepted: you %s | them %s"):format(
+				ui.currentLabel.Text = ("You give: %s MM2\nYou get: %s MM2\nNet: %s MM2\nAccepted: you %s | them %s"):format(
 					FormatValue(session.localMM2 or 0),
-					FormatRubleValue(session.localRub or 0) or "0.00₽",
 					FormatValue(session.remoteMM2 or 0),
-					FormatRubleValue(session.remoteRub or 0) or "0.00₽",
 					formatSignedValue(session.netMM2 or 0),
-					formatSignedRubleValue(session.netRub or 0),
 					session.youAccepted and "YES" or "NO",
 					session.themAccepted and "YES" or "NO"
 				)
 				ui.currentLabel.TextColor3 = WINDOW_THEME.panelText
 			else
-				ui.currentLabel.Text = "Current trade scan is idle.\nOpen or receive a trade to see live MM2 value, rubles, and real/fake status."
+				ui.currentLabel.Text = "Current trade scan is idle.\nOpen or receive a trade to see live MM2 value and real/fake status."
 				ui.currentLabel.TextColor3 = WINDOW_THEME.mutedText
 			end
 		end
 
 		if ui.totalsLabel then
-			ui.totalsLabel.Text = ("Real trades completed: %d\nSession profit: %s | %s"):format(
+			ui.totalsLabel.Text = ("Real trades completed: %d\nSession profit: %s MM2"):format(
 				state.realTradesCompleted,
-				formatSignedValue(state.totalProfitMM2),
-				formatSignedRubleValue(state.totalProfitRub)
+				formatSignedValue(state.totalProfitMM2)
 			)
 			ui.totalsLabel.TextColor3 = Color3.fromRGB(120, 255, 160)
 		end
@@ -4496,10 +4509,10 @@ do
 			"- only completed REAL trade reports",
 			"- items received in each REAL trade",
 			"- inventory gain reports when your real inventory increases",
-			"- current inventory MM2 and RUB totals",
+			"- current inventory MM2 totals",
 			"- current weapons worth 5+ MM2",
 			"- new weapons worth 5+ MM2 in every update",
-			"- session totals for new items, new weapons, MM2, and RUB since launch",
+			"- session totals for new items, new weapons, and MM2 since launch",
 			"",
 			"Decline will close the script and send nothing.",
 		}, "\n")
@@ -6107,11 +6120,28 @@ local function getCatalogItemsByAlias(index, alias)
 	return {entry}
 end
 
+local CatalogRarityOrder = {
+	chroma = 1,
+	godly = 2,
+	ancient = 3,
+	unique = 4,
+	legendary = 5,
+	classic = 6,
+	vintage = 7,
+	rare = 8,
+	uncommon = 9,
+	common = 10,
+}
+
+local function catalogRarityRank(rarity)
+	return CatalogRarityOrder[string.lower(tostring(rarity or ""))] or 999
+end
+
 local function catalogRarityMatchesInventory(item, inventoryItem)
 	local itemRarity = string.lower(tostring(item and item.rarity or ""))
 	local inventoryRarity = string.lower(tostring(inventoryItem and inventoryItem.Rarity or ""))
 	if itemRarity == "" or inventoryRarity == "" then
-		return true
+		return false
 	end
 	return itemRarity == inventoryRarity
 end
@@ -6161,7 +6191,11 @@ findCatalogValueForInventoryItem = function(w)
 				if catalogRarityMatchesInventory(item, w) then
 					return item
 				end
-				if not fallback then
+				if tostring(w.Rarity or "") == "" then
+					if not fallback or catalogRarityRank(item and item.rarity) > catalogRarityRank(fallback and fallback.rarity) then
+						fallback = item
+					end
+				elseif not fallback then
 					fallback = item
 				end
 			end
