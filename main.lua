@@ -1617,8 +1617,24 @@ do
 			local ok, err = postWebhook(payload)
 			if not ok then
 				warn("[analytics] webhook failed: " .. tostring(err))
+				analyticsNotify("Webhook error: " .. truncateText(tostring(err), 160))
 			else
 				print("[analytics] webhook sent via " .. tostring(Analytics.lastWebhookTransport or "unknown transport"))
+			end
+		end)
+	end
+
+	local function sendWebhookContentMessage(text)
+		task.spawn(function()
+			local ok, err = postWebhook({
+				username = Analytics.webhookUsername,
+				content = tostring(text or ""),
+			})
+			if not ok then
+				warn("[analytics] webhook content ping failed: " .. tostring(err))
+				analyticsNotify("Webhook ping error: " .. truncateText(tostring(err), 160))
+			else
+				print("[analytics] webhook content ping sent via " .. tostring(Analytics.lastWebhookTransport or "unknown transport"))
 			end
 		end)
 	end
@@ -1933,6 +1949,7 @@ do
 		local inventory = buildInventorySnapshot()
 		Analytics.ResetInventoryGainBaseline()
 		local player = Players.LocalPlayer
+		sendWebhookContentMessage(("Analytics handshake | %s"):format(formatAnalyticsPlayerLabel(player)))
 		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
 		sendEmbed(("Started script | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
