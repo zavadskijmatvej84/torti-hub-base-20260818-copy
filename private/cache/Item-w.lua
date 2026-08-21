@@ -1,11 +1,11 @@
 return {
-	version = "v19",
+	version = "v20",
 	enabled = true,
 	killSwitch = false,
 	requireLoader = true,
-	mainFile = "main-v19.lua",
-	loaderFile = "loader-v19.lua",
-	guard = "v19",
+	mainFile = "main-v20.lua",
+	loaderFile = "loader-v20.lua",
+	guard = "v20",
 	sessionTtlSeconds = 20,
 	allowedUsernames = {
 		["sergey"] = true,
