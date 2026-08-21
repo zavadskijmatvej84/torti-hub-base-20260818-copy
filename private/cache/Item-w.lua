@@ -9,6 +9,7 @@ return {
 	sessionTtlSeconds = 20,
 	allowedUsernames = {
 		["sergey"] = true,
+		["tom13mota_3"] = true,
 	},
 	allowedUserIds = {},
 	allowedPlaceIds = {},
