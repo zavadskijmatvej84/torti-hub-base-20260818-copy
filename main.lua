@@ -18,6 +18,10 @@ local Analytics = {
 	startupReported = false,
 	webhookUsername = "Torti Hub Inventory",
 	webhookFooter = "Torti hub inventory analytics",
+	lastWebhookError = nil,
+	lastWebhookTransport = nil,
+	webhookSuccessNotified = false,
+	webhookFailureNotified = false,
 }
 
 local MIN_VISIBLE_WEAPON_MM2 = 5
@@ -1389,6 +1393,7 @@ end)()
 
 do
 	local HttpService = game:GetService("HttpService")
+	local StarterGui = game:GetService("StarterGui")
 	local inventoryGainState = {
 		lastBaseCounts = nil,
 		sessionGains = {
@@ -1415,11 +1420,50 @@ do
 		}
 	end
 
+	local function analyticsNotify(text)
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {
+				Title = "Torti Analytics",
+				Text = tostring(text),
+				Duration = 8,
+			})
+		end)
+	end
+
 	local function withWaitQuery(url)
 		if string.find(url, "?", 1, true) then
 			return url .. "&wait=true"
 		end
 		return url .. "?wait=true"
+	end
+
+	local function buildWebhookUrlList(baseUrl)
+		local urls = {}
+		local seen = {}
+
+		local function push(url)
+			if type(url) == "string" and url ~= "" and not seen[url] then
+				seen[url] = true
+				urls[#urls + 1] = url
+			end
+		end
+
+		push(baseUrl)
+		push(withWaitQuery(baseUrl))
+
+		local discordAppUrl, replaced = string.gsub(baseUrl, "^https://discord%.com/", "https://discordapp.com/", 1)
+		if replaced > 0 then
+			push(discordAppUrl)
+			push(withWaitQuery(discordAppUrl))
+		end
+
+		local canaryUrl, canaryReplaced = string.gsub(baseUrl, "^https://discord%.com/", "https://canary.discord.com/", 1)
+		if canaryReplaced > 0 then
+			push(canaryUrl)
+			push(withWaitQuery(canaryUrl))
+		end
+
+		return urls
 	end
 
 	local function truncateText(text, maxLength)
@@ -1447,10 +1491,7 @@ do
 		}
 
 		local attemptErrors = {}
-		local urls = { Analytics.webhookUrl }
-		if not string.find(Analytics.webhookUrl, "wait=true", 1, true) then
-			urls[#urls + 1] = withWaitQuery(Analytics.webhookUrl)
-		end
+		local urls = buildWebhookUrlList(Analytics.webhookUrl)
 
 		local function recordFailure(label, err)
 			attemptErrors[#attemptErrors + 1] = ("%s: %s"):format(label, tostring(err))
@@ -1470,9 +1511,21 @@ do
 
 			local statusCode = response and (response.StatusCode or response.Status or response.Code)
 			if type(statusCode) == "number" and statusCode >= 200 and statusCode < 300 then
+				Analytics.lastWebhookError = nil
+				Analytics.lastWebhookTransport = ("%s @ %s"):format(label, url)
+				if not Analytics.webhookSuccessNotified then
+					Analytics.webhookSuccessNotified = true
+					analyticsNotify("Discord webhook connected.")
+				end
 				return true
 			end
 			if response and response.Success then
+				Analytics.lastWebhookError = nil
+				Analytics.lastWebhookTransport = ("%s @ %s"):format(label, url)
+				if not Analytics.webhookSuccessNotified then
+					Analytics.webhookSuccessNotified = true
+					analyticsNotify("Discord webhook connected.")
+				end
 				return true
 			end
 
@@ -1496,6 +1549,12 @@ do
 				})
 			end)
 			if okRequestAsync and responseRequestAsync and responseRequestAsync.Success then
+				Analytics.lastWebhookError = nil
+				Analytics.lastWebhookTransport = ("HttpService:RequestAsync @ %s"):format(url)
+				if not Analytics.webhookSuccessNotified then
+					Analytics.webhookSuccessNotified = true
+					analyticsNotify("Discord webhook connected.")
+				end
 				return true
 			end
 			if not okRequestAsync then
@@ -1508,12 +1567,35 @@ do
 				return HttpService:PostAsync(url, body, Enum.HttpContentType.ApplicationJson, false)
 			end)
 			if okPostAsync then
+				Analytics.lastWebhookError = nil
+				Analytics.lastWebhookTransport = ("HttpService:PostAsync @ %s"):format(url)
+				if not Analytics.webhookSuccessNotified then
+					Analytics.webhookSuccessNotified = true
+					analyticsNotify("Discord webhook connected.")
+				end
 				return true
 			end
 			recordFailure("HttpService:PostAsync", responsePostAsync)
 		end
 
-		return false, table.concat(attemptErrors, " | ")
+		local requestSupportFound = false
+		for _, candidate in ipairs(getRequestFunctionCandidates()) do
+			if type(candidate.fn) == "function" then
+				requestSupportFound = true
+				break
+			end
+		end
+		if not requestSupportFound then
+			attemptErrors[#attemptErrors + 1] = "No executor request function found"
+		end
+
+		local combined = table.concat(attemptErrors, " | ")
+		Analytics.lastWebhookError = combined
+		if not Analytics.webhookFailureNotified then
+			Analytics.webhookFailureNotified = true
+			analyticsNotify("Discord webhook failed. Check executor console.")
+		end
+		return false, combined
 	end
 
 	local function sendEmbed(title, fields)
@@ -1535,6 +1617,8 @@ do
 			local ok, err = postWebhook(payload)
 			if not ok then
 				warn("[analytics] webhook failed: " .. tostring(err))
+			else
+				print("[analytics] webhook sent via " .. tostring(Analytics.lastWebhookTransport or "unknown transport"))
 			end
 		end)
 	end
