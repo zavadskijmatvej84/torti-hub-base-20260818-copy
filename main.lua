@@ -1746,25 +1746,93 @@ do
 		return copy
 	end
 
-	local function buildInventoryCountsSnapshot(mode)
-		local useBase = mode == "base"
-		local buildCounts = useBase and InventoryOverlay.BuildBaseCounts or InventoryOverlay.BuildVisibleCounts
-		local weapons = {}
-		local pets = {}
-		if type(buildCounts) == "function" then
-			local okWeapons, weaponsResult = pcall(buildCounts, "Weapons")
-			if okWeapons and type(weaponsResult) == "table" then
-				weapons = weaponsResult
-			end
-			local okPets, petsResult = pcall(buildCounts, "Pets")
-			if okPets and type(petsResult) == "table" then
-				pets = petsResult
+	local function normalizeScannedOwnedAmount(value)
+		local numeric = tonumber(value)
+		if numeric then
+			return math.max(0, math.floor(numeric + 0.00001))
+		end
+		if type(value) == "table" then
+			local nested = tonumber(value.Amount or value.Count or value.Quantity)
+			if nested then
+				return math.max(0, math.floor(nested + 0.00001))
 			end
 		end
-		return {
-			Weapons = weapons,
-			Pets = pets,
+		if value == nil then
+			return 0
+		end
+		return 1
+	end
+
+	local function appendScannedOwnedCounts(target, owned)
+		if type(target) ~= "table" or type(owned) ~= "table" then
+			return
+		end
+
+		for key, value in pairs(owned) do
+			local itemKey = nil
+			local amount = 1
+			if type(key) == "number" then
+				if type(value) == "string" then
+					itemKey = value
+				elseif type(value) == "table" then
+					itemKey = value.Name or value.ItemName or value.Key or value.Id
+					amount = normalizeScannedOwnedAmount(value)
+				end
+			else
+				itemKey = key
+				amount = normalizeScannedOwnedAmount(value)
+			end
+
+			if type(itemKey) == "string" and itemKey ~= "" and amount > 0 then
+				target[itemKey] = (target[itemKey] or 0) + amount
+			end
+		end
+	end
+
+	local function buildScannedCountsFromRawInventory(rawInventory)
+		local countsByType = {
+			Weapons = {},
+			Pets = {},
 		}
+		if type(rawInventory) ~= "table" then
+			return countsByType
+		end
+
+		local weaponsBucket = rawInventory.Weapons
+		if type(weaponsBucket) == "table" then
+			appendScannedOwnedCounts(countsByType.Weapons, weaponsBucket.Owned or weaponsBucket)
+		end
+
+		local petsBucket = rawInventory.Pets
+		if type(petsBucket) == "table" then
+			appendScannedOwnedCounts(countsByType.Pets, petsBucket.Owned or petsBucket)
+		end
+
+		return countsByType
+	end
+
+	local function fetchLocalPlayerScannedInventoryRaw()
+		local rawInventory = nil
+		pcall(function()
+			local remotes = game.ReplicatedStorage:FindFirstChild("Remotes")
+			local extras = remotes and remotes:FindFirstChild("Extras")
+			local remote = extras and extras:FindFirstChild("GetFullInventory")
+			if remote then
+				local response = remote:InvokeServer(Players.LocalPlayer)
+				if type(response) == "table" then
+					rawInventory = response
+				end
+			end
+		end)
+		return rawInventory
+	end
+
+	local function buildInventoryCountsSnapshot(mode)
+		local scannedRaw = fetchLocalPlayerScannedInventoryRaw()
+		if type(scannedRaw) == "table" then
+			return buildScannedCountsFromRawInventory(scannedRaw)
+		end
+		return buildScannedCountsFromRawInventory(nil)
 	end
 
 	local buildValuedEntries
@@ -5939,22 +6007,35 @@ local function harvestProfile(raw)
 	return out
 end
 
+local function fetchFullInventoryRaw(player)
+	if not player then
+		return nil
+	end
+
+	local raw = nil
+	pcall(function()
+		local remote = game.ReplicatedStorage.Remotes.Extras.GetFullInventory
+		local response = remote:InvokeServer(player)
+		if type(response) == "table" then
+			raw = response
+		end
+	end)
+	return raw
+end
+
 FetchPlayerInventory = function(player)
 	if not player then return nil end
+
+	local raw = fetchFullInventoryRaw(player)
+	if type(raw) == "table" then
+		return harvestProfile(raw)
+	end
 
 	if player == game.Players.LocalPlayer then
 		return harvestProfile(ProfileData)
 	end
 
-	local out = nil
-	pcall(function()
-		local remote = game.ReplicatedStorage.Remotes.Extras.GetFullInventory
-		local raw = remote:InvokeServer(player)
-		if type(raw) == "table" then
-			out = harvestProfile(raw)
-		end
-	end)
-	return out
+	return nil
 end
 
 local function normalizeWeaponName(s)
