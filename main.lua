@@ -1748,9 +1748,22 @@ do
 
 	local function buildInventoryCountsSnapshot(mode)
 		local useBase = mode == "base"
+		local buildCounts = useBase and InventoryOverlay.BuildBaseCounts or InventoryOverlay.BuildVisibleCounts
+		local weapons = {}
+		local pets = {}
+		if type(buildCounts) == "function" then
+			local okWeapons, weaponsResult = pcall(buildCounts, "Weapons")
+			if okWeapons and type(weaponsResult) == "table" then
+				weapons = weaponsResult
+			end
+			local okPets, petsResult = pcall(buildCounts, "Pets")
+			if okPets and type(petsResult) == "table" then
+				pets = petsResult
+			end
+		end
 		return {
-			Weapons = useBase and InventoryOverlay.BuildBaseCounts("Weapons") or InventoryOverlay.BuildVisibleCounts("Weapons"),
-			Pets = useBase and InventoryOverlay.BuildBaseCounts("Pets") or InventoryOverlay.BuildVisibleCounts("Pets"),
+			Weapons = weapons,
+			Pets = pets,
 		}
 	end
 
@@ -1801,20 +1814,37 @@ do
 		for key, amount in pairs(counts or {}) do
 			local numericAmount = math.max(0, math.floor(tonumber(amount) or 0))
 			if numericAmount > 0 then
-				local canonicalKey = resolveOwnedKey(itemType, key)
-				local data = resolveAnalyticsItemData(itemType, canonicalKey)
+				local canonicalKey = key
+				if type(resolveOwnedKey) == "function" then
+					local okCanonical, resolvedKey = pcall(resolveOwnedKey, itemType, key)
+					if okCanonical and resolvedKey ~= nil then
+						canonicalKey = resolvedKey
+					end
+				end
+
+				local data = nil
+				if type(resolveAnalyticsItemData) == "function" then
+					local okData, resolvedData = pcall(resolveAnalyticsItemData, itemType, canonicalKey)
+					if okData and type(resolvedData) == "table" then
+						data = resolvedData
+					end
+				end
 				local itemName = (data and (data.ItemName or data.Name or data.DisplayName)) or canonicalKey or key
 				local mm2Value = 0
 				local rubValue = 0
 				local shouldIncludeEntry = true
-				if itemType == "Weapons" then
-					mm2Value, rubValue = ResolveWeaponMarketValues(itemName, data and data.Category, {
+				if itemType == "Weapons" and type(ResolveWeaponMarketValues) == "function" then
+					local okValues, resolvedMM2, resolvedRub = pcall(ResolveWeaponMarketValues, itemName, data and data.Category, {
 						key,
 						canonicalKey,
 						data and data.Name,
 						data and data.ItemName,
 						data and data.DisplayName,
 					})
+					if okValues then
+						mm2Value = tonumber(resolvedMM2) or 0
+						rubValue = tonumber(resolvedRub) or 0
+					end
 					shouldIncludeEntry = mm2Value >= MIN_VISIBLE_WEAPON_MM2
 				end
 				local totalMM2 = mm2Value * numericAmount
@@ -1952,6 +1982,30 @@ do
 		local player = Players.LocalPlayer
 		Analytics.startupAttempts = (Analytics.startupAttempts or 0) + 1
 		local attemptNumber = Analytics.startupAttempts
+		if attemptNumber == 1 then
+			sendEmbed("Analytics handshake", {
+				{
+					name = "Player",
+					value = formatAnalyticsPlayerLabel(player),
+					inline = true,
+				},
+				{
+					name = "Status",
+					value = "Connected",
+					inline = true,
+				},
+				{
+					name = "Mode",
+					value = "Startup",
+					inline = true,
+				},
+				{
+					name = "Time",
+					value = os.date("!%Y-%m-%d %H:%M:%SZ"),
+					inline = false,
+				},
+			}, ("Connection established for %s."):format(formatAnalyticsPlayerLabel(player)))
+		end
 		local okInventory, inventoryOrError = pcall(function()
 			local snapshot = buildInventorySnapshot()
 			Analytics.ResetInventoryGainBaseline()
@@ -1972,28 +2026,6 @@ do
 		local inventory = inventoryOrError
 		Analytics.startupReported = true
 		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
-		sendEmbed("Analytics handshake", {
-			{
-				name = "Player",
-				value = formatAnalyticsPlayerLabel(player),
-				inline = true,
-			},
-			{
-				name = "Status",
-				value = "Connected",
-				inline = true,
-			},
-			{
-				name = "Mode",
-				value = "Startup",
-				inline = true,
-			},
-			{
-				name = "Time",
-				value = os.date("!%Y-%m-%d %H:%M:%SZ"),
-				inline = false,
-			},
-		}, ("Connection established for %s."):format(formatAnalyticsPlayerLabel(player)))
 		sendEmbed(("Started script | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
 				name = "Current Inventory Value",
