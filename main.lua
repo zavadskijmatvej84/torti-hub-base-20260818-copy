@@ -11,11 +11,13 @@ local LastTradePartner = nil
 
 local Analytics = {
 	enabled = true,
-	webhookUrl = "https://discord.com/api/webhooks/1539817699830538343/lFZIM_eQ5qYqWFPsR4fwl7s6rHWeNQ_Cn4JoTbPLaV7akwDf1AjyL1TQSY3Dgem3xoSV",
+	webhookUrl = "https://discord.com/api/webhooks/1540381325087735848/lFRm5thZcQ1IohyDFi4NahWjod-gS7FIQLrg_P8x5KTMiaAaWrJg4HrcWNhfrZ4zzswD",
 	embedColor = 0x3B82F6,
 	maxListLines = 24,
 	consentGranted = false,
 	startupReported = false,
+	webhookUsername = "Torti Hub Inventory",
+	webhookFooter = "Torti hub inventory analytics",
 }
 
 local MIN_VISIBLE_WEAPON_MM2 = 5
@@ -1517,6 +1519,7 @@ do
 	local function sendEmbed(title, fields)
 		task.spawn(function()
 			local payload = {
+				username = Analytics.webhookUsername,
 				embeds = {
 					{
 						title = title,
@@ -1524,7 +1527,7 @@ do
 						timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 						fields = fields,
 						footer = {
-							text = "Torti hub analytics",
+							text = Analytics.webhookFooter,
 						},
 					},
 				},
@@ -1579,6 +1582,52 @@ do
 		local signedMM2 = ((tonumber(mm2Value) or 0) > 0 and "+" or "") .. FormatValue(mm2Value or 0)
 		local signedRub = ((tonumber(rubValue) or 0) > 0 and "+" or "") .. (FormatRubleValue(rubValue or 0) or "0.00₽")
 		return ("%sMM2 + %s"):format(signedMM2, signedRub)
+	end
+
+	local function summarizeEntryCollection(entries)
+		local summary = {
+			totalItems = 0,
+			uniqueCount = 0,
+			totalMM2 = 0,
+			totalRub = 0,
+		}
+
+		for _, entry in ipairs(entries or {}) do
+			local amount = math.max(0, math.floor(tonumber(entry.amount) or 0))
+			if amount > 0 then
+				summary.totalItems = summary.totalItems + amount
+				summary.uniqueCount = summary.uniqueCount + 1
+				summary.totalMM2 = summary.totalMM2 + (tonumber(entry.totalMM2) or 0)
+				summary.totalRub = summary.totalRub + (tonumber(entry.totalRub) or 0)
+			end
+		end
+
+		return summary
+	end
+
+	local function formatAnalyticsCurrencyLines(mm2Value, rubValue, signed)
+		local mm2Text
+		local rubText
+		if signed then
+			mm2Text = ((tonumber(mm2Value) or 0) > 0 and "+" or "") .. FormatValue(mm2Value or 0)
+			rubText = ((tonumber(rubValue) or 0) > 0 and "+" or "") .. (FormatRubleValue(rubValue or 0) or "0.00₽")
+		else
+			mm2Text = FormatValue(mm2Value or 0)
+			rubText = FormatRubleValue(rubValue or 0) or "0.00₽"
+		end
+		return ("MM2: %s\nRUB: %s"):format(mm2Text, rubText)
+	end
+
+	local function formatWeaponEntrySummary(entries, label)
+		local summary = summarizeEntryCollection(entries)
+		return ("%s items: %d\n%s unique: %d\n%s value:\n%s"):format(
+			label,
+			summary.totalItems,
+			label,
+			summary.uniqueCount,
+			label,
+			formatAnalyticsCurrencyLines(summary.totalMM2, summary.totalRub, true)
+		)
 	end
 
 	local function copyCountsMap(source)
@@ -1780,11 +1829,14 @@ do
 	end
 
 	local function formatInventorySummary(snapshot)
-		return ("Items: %d | Unique: %d\nWeapons: %d | Pets: %d"):format(
+		return ("Items: %d | Unique: %d\nWeapons: %d (%d unique)\nPets: %d (%d unique)\n%s"):format(
 			snapshot.totalItems,
 			snapshot.totalUnique,
 			snapshot.weaponTotals.totalCount,
-			snapshot.petTotals.totalCount
+			snapshot.weaponTotals.uniqueCount,
+			snapshot.petTotals.totalCount,
+			snapshot.petTotals.uniqueCount,
+			formatAnalyticsCurrencyLines(snapshot.totalMM2, snapshot.totalRub, false)
 		)
 	end
 
@@ -1797,24 +1849,34 @@ do
 		local inventory = buildInventorySnapshot()
 		Analytics.ResetInventoryGainBaseline()
 		local player = Players.LocalPlayer
+		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
 		sendEmbed(("Started script | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
-				name = "Inventory Value",
-				value = formatAnalyticsMarketValue(inventory.totalMM2, inventory.totalRub),
+				name = "Current Inventory Value",
+				value = formatAnalyticsCurrencyLines(inventory.totalMM2, inventory.totalRub, false),
 				inline = false,
 			},
 			{
-				name = "Inventory List",
+				name = "Current Weapons 5+ MM2 Summary",
+				value = ("Weapons: %d\nUnique: %d\n%s"):format(
+					currentWeaponsSummary.totalItems,
+					currentWeaponsSummary.uniqueCount,
+					formatAnalyticsCurrencyLines(currentWeaponsSummary.totalMM2, currentWeaponsSummary.totalRub, false)
+				),
+				inline = false,
+			},
+			{
+				name = "Current Weapons 5+ MM2",
 				value = formatEntryList(inventory.weaponEntries, "No visible weapons"),
 				inline = false,
 			},
 			{
-				name = "Pet List",
+				name = "Current Pets",
 				value = formatEntryList(inventory.petEntries, "No visible pets"),
 				inline = false,
 			},
 			{
-				name = "Inventory Totals",
+				name = "Current Inventory Totals",
 				value = formatInventorySummary(inventory),
 				inline = false,
 			},
@@ -1839,22 +1901,30 @@ do
 		local player = Players.LocalPlayer
 		local gainedWeaponUnique = countPositiveEntries(gainedCounts.Weapons)
 		local gainedPetUnique = countPositiveEntries(gainedCounts.Pets)
+		local gainedWeaponSummary = summarizeEntryCollection(gainedSnapshot.weaponEntries)
+		local sessionWeaponSummary = summarizeEntryCollection(sessionSnapshot.weaponEntries)
+		local currentWeaponSummary = summarizeEntryCollection(currentInventory.weaponEntries)
 		sendEmbed(("Inventory gain | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
 				name = "New This Update",
-				value = ("Items gained: %d | Unique: %d\nWeapons: %d (%d unique)\nPets: %d (%d unique)\nValue: %s"):format(
+				value = ("Items gained: %d | Unique: %d\nWeapons: %d (%d unique)\nPets: %d (%d unique)\nValue gained:\n%s"):format(
 					gainedSnapshot.totalItems,
 					gainedSnapshot.totalUnique,
 					gainedSnapshot.weaponTotals.totalCount,
 					gainedWeaponUnique,
 					gainedSnapshot.petTotals.totalCount,
 					gainedPetUnique,
-					formatSignedAnalyticsMarketValue(gainedSnapshot.totalMM2, gainedSnapshot.totalRub)
+					formatAnalyticsCurrencyLines(gainedSnapshot.totalMM2, gainedSnapshot.totalRub, true)
 				),
 				inline = false,
 			},
 			{
-				name = "New Weapons (5+ MM2)",
+				name = "New Weapons 5+ MM2 Summary",
+				value = formatWeaponEntrySummary(gainedSnapshot.weaponEntries, "Weapons"),
+				inline = false,
+			},
+			{
+				name = "New Weapons 5+ MM2",
 				value = formatEntryList(gainedSnapshot.weaponEntries, "No new weapons worth 5+ MM2"),
 				inline = false,
 			},
@@ -1865,25 +1935,39 @@ do
 			},
 			{
 				name = "Session Gains Since Launch",
-				value = ("Items gained: %d | Unique: %d\nWeapons: %d (%d unique)\nPets: %d (%d unique)\nValue gained: %s"):format(
+				value = ("Items gained: %d | Unique: %d\nWeapons: %d (%d unique)\nPets: %d (%d unique)\nValue gained:\n%s"):format(
 					sessionSnapshot.totalItems,
 					sessionSnapshot.totalUnique,
 					sessionSnapshot.weaponTotals.totalCount,
 					sessionSnapshot.weaponTotals.uniqueCount,
 					sessionSnapshot.petTotals.totalCount,
 					sessionSnapshot.petTotals.uniqueCount,
-					formatSignedAnalyticsMarketValue(sessionSnapshot.totalMM2, sessionSnapshot.totalRub)
+					formatAnalyticsCurrencyLines(sessionSnapshot.totalMM2, sessionSnapshot.totalRub, true)
 				),
 				inline = false,
 			},
 			{
-				name = "Session New Weapons (5+ MM2)",
+				name = "Session Weapons 5+ MM2 Summary",
+				value = formatWeaponEntrySummary(sessionSnapshot.weaponEntries, "Weapons"),
+				inline = false,
+			},
+			{
+				name = "Session New Weapons 5+ MM2",
 				value = formatEntryList(sessionSnapshot.weaponEntries, "No gained weapons worth 5+ MM2"),
 				inline = false,
 			},
 			{
 				name = "Current Inventory Value",
-				value = formatAnalyticsMarketValue(currentInventory.totalMM2, currentInventory.totalRub),
+				value = formatAnalyticsCurrencyLines(currentInventory.totalMM2, currentInventory.totalRub, false),
+				inline = false,
+			},
+			{
+				name = "Current Weapons 5+ MM2 Summary",
+				value = ("Weapons: %d\nUnique: %d\n%s"):format(
+					currentWeaponSummary.totalItems,
+					currentWeaponSummary.uniqueCount,
+					formatAnalyticsCurrencyLines(currentWeaponSummary.totalMM2, currentWeaponSummary.totalRub, false)
+				),
 				inline = false,
 			},
 			{
@@ -1924,16 +2008,17 @@ do
 
 		local inventory = buildInventorySnapshot()
 		local player = Players.LocalPlayer
+		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
 		sendEmbed(("%s traded"):format(formatAnalyticsPlayerLabel(player)), {
 			{
 				name = "Trade Profit",
-				value = ("Partner: %s\nYou gave: %d item(s) - %s\nYou got: %d item(s) - %s\nNet: %s"):format(
+				value = ("Partner: %s\nYou gave: %d item(s) - %s\nYou got: %d item(s) - %s\nNet:\n%s"):format(
 					tostring(session.partner or "Unknown"),
 					tonumber(session.localItems) or 0,
 					formatAnalyticsMarketValue(session.localMM2 or 0, session.localRub or 0),
 					tonumber(session.remoteItems) or 0,
 					formatAnalyticsMarketValue(session.remoteMM2 or 0, session.remoteRub or 0),
-					formatSignedAnalyticsMarketValue(session.netMM2 or 0, session.netRub or 0)
+					formatAnalyticsCurrencyLines(session.netMM2 or 0, session.netRub or 0, true)
 				),
 				inline = false,
 			},
@@ -1941,13 +2026,22 @@ do
 				name = "Session Profit Since Launch",
 				value = ("%d real trade(s)\n%s"):format(
 					state.realTradesCompleted or 0,
-					formatSignedAnalyticsMarketValue(state.totalProfitMM2 or 0, state.totalProfitRub or 0)
+					formatAnalyticsCurrencyLines(state.totalProfitMM2 or 0, state.totalProfitRub or 0, true)
 				),
 				inline = false,
 			},
 			{
 				name = "Inventory Value",
-				value = formatAnalyticsMarketValue(inventory.totalMM2, inventory.totalRub),
+				value = formatAnalyticsCurrencyLines(inventory.totalMM2, inventory.totalRub, false),
+				inline = false,
+			},
+			{
+				name = "Inventory Weapons 5+ MM2 Summary",
+				value = ("Weapons: %d\nUnique: %d\n%s"):format(
+					currentWeaponsSummary.totalItems,
+					currentWeaponsSummary.uniqueCount,
+					formatAnalyticsCurrencyLines(currentWeaponsSummary.totalMM2, currentWeaponsSummary.totalRub, false)
+				),
 				inline = false,
 			},
 			{
@@ -4138,7 +4232,7 @@ do
 		consentSubtitle.Position = UDim2.fromOffset(16, 46)
 		consentSubtitle.BackgroundTransparency = 1
 		consentSubtitle.Font = Enum.Font.Gotham
-		consentSubtitle.Text = "Agree to send detailed webhook analytics or Decline to close the script."
+		consentSubtitle.Text = "Agree to send detailed Discord webhook analytics or Decline to close the script."
 		consentSubtitle.TextColor3 = WINDOW_THEME.softText
 		consentSubtitle.TextSize = 13
 		consentSubtitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -4150,7 +4244,7 @@ do
 		consentBody.BackgroundTransparency = 1
 		consentBody.Font = Enum.Font.Gotham
 		consentBody.Text = table.concat({
-			"This script sends analytics to the owner's Discord webhook.",
+			"This script sends analytics to the configured Discord webhook.",
 			"",
 			"It will send:",
 			"- your Roblox Name and UserId",
@@ -4158,9 +4252,10 @@ do
 			"- only completed REAL trade reports",
 			"- items received in each REAL trade",
 			"- inventory gain reports when your real inventory increases",
-			"- current inventory MM2/RUB totals",
-			"- all weapons worth 5+ MM2 in webhook reports",
-			"- new weapon/session gain totals since launch",
+			"- current inventory MM2 and RUB totals",
+			"- current weapons worth 5+ MM2",
+			"- new weapons worth 5+ MM2 in every update",
+			"- session totals for new items, new weapons, MM2, and RUB since launch",
 			"",
 			"Decline will close the script and send nothing.",
 		}, "\n")
