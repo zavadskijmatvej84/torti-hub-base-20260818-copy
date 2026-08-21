@@ -16,6 +16,7 @@ local Analytics = {
 	maxListLines = 24,
 	consentGranted = false,
 	startupReported = false,
+	startupAttempts = 0,
 	webhookUsername = "Torti Hub Inventory",
 	webhookFooter = "Torti hub inventory analytics",
 	lastWebhookError = nil,
@@ -1944,12 +1945,32 @@ do
 		if Analytics.startupReported or not Analytics.consentGranted then
 			return
 		end
-		Analytics.startupReported = true
-
-		local inventory = buildInventorySnapshot()
-		Analytics.ResetInventoryGainBaseline()
 		local player = Players.LocalPlayer
-		sendWebhookContentMessage(("Analytics handshake | %s"):format(formatAnalyticsPlayerLabel(player)))
+		Analytics.startupAttempts = (Analytics.startupAttempts or 0) + 1
+		local attemptNumber = Analytics.startupAttempts
+		if attemptNumber == 1 then
+			sendWebhookContentMessage(("Analytics handshake | %s"):format(formatAnalyticsPlayerLabel(player)))
+		end
+
+		local okInventory, inventoryOrError = pcall(function()
+			local snapshot = buildInventorySnapshot()
+			Analytics.ResetInventoryGainBaseline()
+			return snapshot
+		end)
+		if not okInventory then
+			local errText = tostring(inventoryOrError)
+			warn("[analytics] startup snapshot failed: " .. errText)
+			analyticsNotify("Startup snapshot error: " .. truncateText(errText, 160))
+			if attemptNumber < 8 then
+				task.delay(2, function()
+					Analytics.ReportStartup()
+				end)
+			end
+			return
+		end
+
+		local inventory = inventoryOrError
+		Analytics.startupReported = true
 		local currentWeaponsSummary = summarizeEntryCollection(inventory.weaponEntries)
 		sendEmbed(("Started script | %s"):format(formatAnalyticsPlayerLabel(player)), {
 			{
